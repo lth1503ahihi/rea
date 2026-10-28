@@ -9,6 +9,40 @@ const sourceRoots = [
 ];
 let hooks;
 
+// Node 26 keeps only strip mode, which rejects the parameter properties, enums
+// and namespaces owned source uses. Its in-process replacement is rolldown's.
+const nodeTransformsTypeScript = (() => {
+  try {
+    stripTypeScriptTypes("", { mode: "transform" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const rolldownTransformSync = nodeTransformsTypeScript
+  ? undefined
+  : (await import("rolldown/utils")).transformSync;
+
+const transformTypeScript = (source, url) => {
+  if (rolldownTransformSync === undefined)
+    return stripTypeScriptTypes(source, {
+      mode: "transform",
+      sourceMap: true,
+      sourceUrl: url,
+    });
+  const transformed = rolldownTransformSync(url, source, {
+    lang: "ts",
+    sourcemap: true,
+  });
+  if (transformed.errors.length > 0)
+    throw new AggregateError(
+      transformed.errors,
+      `Verifier module source did not transform: ${url}`,
+    );
+  const map = Buffer.from(JSON.stringify(transformed.map)).toString("base64");
+  return `${transformed.code}\n//# sourceMappingURL=data:application/json;base64,${map}\n//# sourceURL=${url}`;
+};
+
 const ownedSourcePath = (url) => {
   if (!url.startsWith("file:")) return undefined;
   const path = fileURLToPath(url);
@@ -95,11 +129,7 @@ const loadSource = (url, context, nextLoad) => {
   return {
     ...loaded,
     format,
-    source: stripTypeScriptTypes(source, {
-      mode: "transform",
-      sourceMap: true,
-      sourceUrl: url,
-    }),
+    source: transformTypeScript(source, url),
   };
 };
 
